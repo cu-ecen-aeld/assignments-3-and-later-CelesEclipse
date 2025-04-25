@@ -1,4 +1,9 @@
 #include "systemcalls.h"
+#include "fcntl.h"
+#include "stdlib.h"
+#include "unistd.h"
+#include <sys/types.h>
+#include <sys/wait.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,7 +21,11 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
+    int res = system(cmd);
+    if (res == -1) {
+        perror("System call failed");
+        return false;
+    }
     return true;
 }
 
@@ -47,7 +56,6 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
 
 /*
  * TODO:
@@ -58,10 +66,38 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Call execv for child process */
+        fprintf(stderr, "Debug: command[0] = %s\n", command[0] ? command[0] : "NULL");
+        if (execv(command[0], command) == -1) {
+            perror("execv failed");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else if (pid < 0) {
+        perror("fork failed");
+        va_end(args);
+        return false;
+    }
+
+    /* Handle parent process */
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("wait failed");
+        va_end(args);
+        return false;
+    }
 
     va_end(args);
 
-    return true;
+    /* This condition ensures that only return true if the child process terminated successfully */
+    /* Normally, the test case failed */
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -82,8 +118,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
-
 
 /*
  * TODO
@@ -92,8 +126,50 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    fflush(stdout);
+    int pid = fork();
+    int fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    if (fd < 0) {
+        perror("open failed");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Check pid and call execv */
+    switch (pid) {
+        case -1:
+            perror("fork failed");
+            exit(EXIT_FAILURE);
+            break;
+        case 0:
+            if (dup2(fd, 1) < 0) {
+                perror("dup2 failed");
+                exit(EXIT_FAILURE);
+            }
+            close(fd);
+            if (execv(command[0], command) == -1) {
+                perror("execv failed");
+                exit(EXIT_FAILURE);
+            }
+            break;
+        default:
+            close(fd);
+            break;
+    }
+    
+    /* Handle parent process */
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("wait failed");
+        va_end(args);
+        return false;
+    }
 
     va_end(args);
 
-    return true;
+    /* This condition ensures that only return true if the child process terminated successfully */
+    /* Normally, the test case failed */
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+    return false;
 }
