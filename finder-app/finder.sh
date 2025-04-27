@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Check if any of the parameters were not specified
 if [ -z "$1" ] || [ -z "$2" ]; then
