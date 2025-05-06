@@ -9,23 +9,56 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <getopt.h>
 
 #define PORT 9000
 #define BACKLOG 10
 #define DATA_FILE "/var/tmp/aesdsocketdata"
 
 volatile sig_atomic_t keep_running = 1;
+int fd_file = -1;
+int server_fd = -1;
 
-void signal_handler(int sig) {
-    keep_running = 0;
+void cleanup()
+{
+    syslog(LOG_INFO, "Shutting down server ...");
+    if (fd_file >= 0) {
+        close(fd_file);
+    }
+    if (server_fd >= 0) {
+        close(server_fd);
+    }
+    unlink(DATA_FILE);
+    closelog();
 }
 
-int main() {
-    int server_fd, client_fd;
+void signal_handler(int sig) 
+{
+    keep_running = 0;
+    cleanup();
+    exit(0);
+}
+
+int main(int argc, char* argv[]) 
+{
+    int client_fd;
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_len = sizeof(client_addr);
     char buffer[1024];
-    int fd_file;
+    int daemon_mode = 0;
+    int daemon_opt;
+
+    while ((daemon_opt = getopt(argc, argv, "d")) != -1) {
+        switch (daemon_opt) {
+            case 'd':
+                daemon_mode = 1;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-d]\n", argv[0]);
+                break;
+        }
+    }
     
     // Setting up signal handlers for SIGINT and SIGTERM
     signal(SIGINT, signal_handler);
@@ -38,6 +71,7 @@ int main() {
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         syslog(LOG_ERR, "Socket creation failed");
+        cleanup();
         return -1;
     }
 
@@ -45,7 +79,7 @@ int main() {
     int opt = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         syslog(LOG_ERR, "Setsockopt failed");
-        close(server_fd);
+        cleanup();
         return -1;
     }
 
@@ -58,14 +92,45 @@ int main() {
     // Bind socket
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         syslog(LOG_ERR, "Bind failed");
-        close(server_fd);
+        cleanup();
         return -1;
+    }
+
+    // Fork to daemonize if -d is specified
+    if (daemon_mode) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            syslog(LOG_ERR, "Fork failed");
+            cleanup();
+            return -1;
+        }
+        if (pid > 0) {
+            // Exit parent process
+            cleanup();
+            return 0;
+        }
+
+        // Continue child process
+        umask(0);
+        if (setsid() < 0) {
+            syslog(LOG_ERR, "setsid failed");
+            cleanup();
+            return -1;
+        }
+        if (chdir("/") < 0) {
+            syslog(LOG_ERR, "chdir failed");
+            cleanup();
+            return -1;
+        }
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
     }
 
     // Listen for connections
     if (listen(server_fd, BACKLOG) < 0) {
         syslog(LOG_ERR, "Listen failed");
-        close(server_fd);
+        cleanup();
         return -1;
     }
 
@@ -73,7 +138,7 @@ int main() {
     fd_file = open(DATA_FILE, O_RDWR | O_CREAT | O_APPEND, 0644);
     if (fd_file < 0) {
         syslog(LOG_ERR, "Failed to open data file");
-        close(server_fd);
+        cleanup();
         return -1;
     }
 
@@ -127,10 +192,6 @@ int main() {
     }
 
     // Cleanup
-    syslog(LOG_INFO, "Shutting down server");
-    close(fd_file);
-    close(server_fd);
-    unlink(DATA_FILE);
-    closelog();
+    cleanup();
     return 0;
 }
